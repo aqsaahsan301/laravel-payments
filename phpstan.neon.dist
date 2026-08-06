@@ -5,3 +5,8 @@ parameters:
         - config
         - routes
     tmpDir: build/phpstan
+    # This package's own config/ directory, not the host app's — Larastan's
+    # noEnvCallsOutsideOfConfig rule defaults to config_path(), which during
+    # static analysis resolves to Testbench's workbench app, not this package.
+    configDirectories:
+        - %currentWorkingDirectory%/config
