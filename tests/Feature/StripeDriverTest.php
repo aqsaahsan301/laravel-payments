@@ -3,32 +3,8 @@
 declare(strict_types=1);
 
 use Aqsaahsan301\LaravelPayments\Drivers\StripeDriver;
-use Aqsaahsan301\LaravelPayments\Tests\Support\FakeStripeHttpClient;
-use Illuminate\Http\Request;
 use Stripe\ApiRequestor;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
-
-function fakeStripeHttp(): FakeStripeHttpClient
-{
-    $fake = new FakeStripeHttpClient;
-    ApiRequestor::setHttpClient($fake);
-
-    return $fake;
-}
-
-function signedStripeWebhookRequest(array $payload, string $secret): Request
-{
-    $body = json_encode($payload);
-    $timestamp = time();
-    $signature = hash_hmac('sha256', "{$timestamp}.{$body}", $secret);
-
-    return Request::create(
-        '/webhooks/stripe',
-        'POST',
-        content: $body,
-        server: ['HTTP_STRIPE_SIGNATURE' => "t={$timestamp},v1={$signature}"],
-    );
-}
 
 beforeEach(function () {
     config([

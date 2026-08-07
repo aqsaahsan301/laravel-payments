@@ -6,12 +6,18 @@ namespace Aqsaahsan301\LaravelPayments\Drivers;
 
 use Aqsaahsan301\LaravelPayments\Contracts\PaymentGateway;
 use Aqsaahsan301\LaravelPayments\DataTransferObjects\CheckoutResult;
+use Aqsaahsan301\LaravelPayments\Events\PaymentFailed;
+use Aqsaahsan301\LaravelPayments\Events\PaymentSucceeded;
+use Aqsaahsan301\LaravelPayments\Events\SubscriptionCancelled;
+use Aqsaahsan301\LaravelPayments\Events\SubscriptionUpdated;
 use Illuminate\Config\Repository as ConfigRepository;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Http\Request;
 use InvalidArgumentException;
 use Stripe\Event;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\StripeClient;
+use Stripe\StripeObject;
 use Stripe\Webhook;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
@@ -30,6 +36,7 @@ class StripeDriver implements PaymentGateway
     public function __construct(
         private readonly StripeClient $client,
         private readonly ConfigRepository $config,
+        private readonly Dispatcher $events,
     ) {}
 
     public function checkout(
@@ -77,11 +84,64 @@ class StripeDriver implements PaymentGateway
     {
         $event = $this->verifyAndParseWebhook($request);
 
-        // Day 4 dispatches this package's own Laravel events (PaymentSucceeded,
-        // SubscriptionCancelled, PaymentFailed, SubscriptionUpdated) based on
-        // $event->type here, so host apps never need to know this came from Stripe.
+        $this->dispatchPackageEvent($event);
 
         return new Response('Webhook handled', 200);
+    }
+
+    /**
+     * Translates a Stripe event into this package's own gateway-agnostic
+     * event, and dispatches that instead. Host app listeners depend on
+     * PaymentSucceeded/PaymentFailed/SubscriptionCancelled/SubscriptionUpdated
+     * — never on anything Stripe-specific — so they keep working unchanged
+     * if the active gateway ever changes.
+     */
+    private function dispatchPackageEvent(Event $event): void
+    {
+        /** @var StripeObject $object */
+        $object = $event->data->object;
+
+        match ($event->type) {
+            'invoice.payment_succeeded' => $this->events->dispatch(new PaymentSucceeded(
+                providerCustomerId: (string) $object['customer'],
+                providerSubscriptionId: $this->nullableString($object['subscription'] ?? null),
+                amount: (int) $object['amount_paid'],
+                currency: (string) $object['currency'],
+                raw: $object->toArray(),
+            )),
+            'invoice.payment_failed' => $this->events->dispatch(new PaymentFailed(
+                providerCustomerId: (string) $object['customer'],
+                providerSubscriptionId: $this->nullableString($object['subscription'] ?? null),
+                amount: (int) $object['amount_due'],
+                currency: (string) $object['currency'],
+                raw: $object->toArray(),
+            )),
+            'customer.subscription.deleted' => $this->events->dispatch(new SubscriptionCancelled(
+                providerCustomerId: (string) $object['customer'],
+                providerSubscriptionId: (string) $object['id'],
+                raw: $object->toArray(),
+            )),
+            'customer.subscription.updated' => $this->events->dispatch(new SubscriptionUpdated(
+                providerCustomerId: (string) $object['customer'],
+                providerSubscriptionId: (string) $object['id'],
+                status: (string) $object['status'],
+                providerPriceId: $this->firstItemPriceId($object),
+                raw: $object->toArray(),
+            )),
+            default => null,
+        };
+    }
+
+    private function nullableString(mixed $value): ?string
+    {
+        return $value === null ? null : (string) $value;
+    }
+
+    private function firstItemPriceId(StripeObject $subscription): ?string
+    {
+        $items = $subscription['items']['data'] ?? [];
+
+        return isset($items[0]['price']['id']) ? (string) $items[0]['price']['id'] : null;
     }
 
     private function verifyAndParseWebhook(Request $request): Event
