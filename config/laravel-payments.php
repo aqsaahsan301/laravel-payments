@@ -20,6 +20,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Webhook path
+    |--------------------------------------------------------------------------
+    |
+    | Where the active gateway's webhook route is registered. Remember to
+    | exclude this URI from CSRF verification in the host app's
+    | bootstrap/app.php — the provider calling it can't supply a token.
+    |
+    */
+
+    'webhook_path' => env('PAYMENT_GATEWAY_WEBHOOK_PATH', 'laravel-payments/webhook'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Gateway configuration
     |--------------------------------------------------------------------------
     |
