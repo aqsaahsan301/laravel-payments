@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Aqsaahsan301\LaravelPayments;
 
 use Aqsaahsan301\LaravelPayments\Contracts\PaymentGateway;
+use Aqsaahsan301\LaravelPayments\Drivers\StripeDriver;
 use Illuminate\Support\Manager;
 use InvalidArgumentException;
 
@@ -36,8 +37,18 @@ class PaymentManager extends Manager
     }
 
     /**
+     * The built-in Stripe driver, resolved via the container the same way
+     * Laravel's own Manager subclasses resolve createXDriver() methods.
+     */
+    protected function createStripeDriver(): StripeDriver
+    {
+        return $this->container->make(StripeDriver::class);
+    }
+
+    /**
      * Register a driver by name, resolved via the container so drivers can
-     * type-hint their own dependencies normally.
+     * type-hint their own dependencies normally. For third-party drivers
+     * (Billplz, ToyyibPay, ...) shipped outside this package.
      */
     public function extendDriver(string $driver, string $concreteClass): static
     {

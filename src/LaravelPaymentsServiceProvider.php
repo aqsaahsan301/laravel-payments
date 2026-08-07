@@ -7,6 +7,7 @@ namespace Aqsaahsan301\LaravelPayments;
 use Aqsaahsan301\LaravelPayments\Contracts\PaymentGateway;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
+use Stripe\StripeClient;
 
 class LaravelPaymentsServiceProvider extends ServiceProvider
 {
@@ -22,6 +23,13 @@ class LaravelPaymentsServiceProvider extends ServiceProvider
         $this->app->bind(
             PaymentGateway::class,
             fn (Application $app) => $app->make(PaymentManager::class)->gateway(),
+        );
+
+        $this->app->singleton(
+            StripeClient::class,
+            fn (Application $app) => new StripeClient(
+                (string) $app->make('config')->get('laravel-payments.gateways.stripe.secret'),
+            ),
         );
     }
 
