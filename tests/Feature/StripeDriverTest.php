@@ -18,6 +18,55 @@ afterEach(function () {
     ApiRequestor::setHttpClient(null);
 });
 
+test('charge creates a one-time payment checkout session, not a subscription', function () {
+    $http = fakeStripeHttp();
+    $http->queue(200, ['id' => 'cus_new', 'object' => 'customer']);
+    $http->queue(200, ['id' => 'cs_test', 'object' => 'checkout.session', 'url' => 'https://checkout.stripe.com/cs_test']);
+
+    $result = app(StripeDriver::class)->charge(
+        customerEmail: 'ayesha@example.com',
+        amount: 4900,
+        currency: 'usd',
+        options: ['success_url' => 'https://app.test/paid?ok', 'cancel_url' => 'https://app.test/paid?cancelled'],
+    );
+
+    expect($result->url)->toBe('https://checkout.stripe.com/cs_test')
+        ->and($result->providerCustomerId)->toBe('cus_new')
+        ->and($http->requests[1]['params']['mode'])->toBe('payment')
+        ->and($http->requests[1]['params']['line_items'][0]['price_data']['unit_amount'])->toBe(4900)
+        ->and($http->requests[1]['params']['line_items'][0]['price_data']['currency'])->toBe('usd');
+});
+
+test('charge reuses an existing customer id when given one', function () {
+    $http = fakeStripeHttp();
+    $http->queue(200, ['id' => 'cs_test', 'object' => 'checkout.session', 'url' => 'https://checkout.stripe.com/cs_test']);
+
+    $result = app(StripeDriver::class)->charge(
+        customerEmail: 'ayesha@example.com',
+        amount: 1900,
+        currency: 'usd',
+        options: [
+            'success_url' => 'https://app.test/paid?ok',
+            'cancel_url' => 'https://app.test/paid?cancelled',
+            'provider_customer_id' => 'cus_existing',
+        ],
+    );
+
+    expect($result->providerCustomerId)->toBe('cus_existing')
+        ->and($http->requests)->toHaveCount(1);
+});
+
+test('charge requires success_url and cancel_url', function () {
+    fakeStripeHttp();
+
+    app(StripeDriver::class)->charge(
+        customerEmail: 'ayesha@example.com',
+        amount: 1900,
+        currency: 'usd',
+        options: [],
+    );
+})->throws(InvalidArgumentException::class, "The 'success_url' option is required");
+
 test('checkout creates a new customer when none is given, then a checkout session', function () {
     $http = fakeStripeHttp();
     $http->queue(200, ['id' => 'cus_new', 'object' => 'customer']);

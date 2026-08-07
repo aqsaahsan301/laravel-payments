@@ -16,8 +16,14 @@ use InvalidArgumentException;
  * that value changes, because everything depends on PaymentGateway, not on
  * PaymentManager or any concrete driver.
  *
- * @method \Aqsaahsan301\LaravelPayments\DataTransferObjects\CheckoutResult checkout(?string $providerCustomerId, string $customerEmail, string $plan, array<string, mixed> $options = [])
+ * @method \Aqsaahsan301\LaravelPayments\DataTransferObjects\ChargeResult charge(string $customerEmail, int $amount, string $currency, array<string, mixed> $options = [])
  * @method \Symfony\Component\HttpFoundation\Response handleWebhook(\Illuminate\Http\Request $request)
+ *
+ * The three @method tags below only resolve at runtime if the active driver
+ * also implements SupportsSubscriptions — check `instanceof` before relying
+ * on them, or resolve Contracts\SupportsSubscriptions from the container
+ * instead of PaymentManager/PaymentGateway.
+ * @method \Aqsaahsan301\LaravelPayments\DataTransferObjects\CheckoutResult checkout(?string $providerCustomerId, string $customerEmail, string $plan, array<string, mixed> $options = [])
  * @method void cancelSubscription(string $providerSubscriptionId)
  * @method string|null currentPlan(string $providerCustomerId)
  */

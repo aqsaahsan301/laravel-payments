@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Aqsaahsan301\LaravelPayments\Drivers;
 
 use Aqsaahsan301\LaravelPayments\Contracts\PaymentGateway;
+use Aqsaahsan301\LaravelPayments\Contracts\SupportsSubscriptions;
+use Aqsaahsan301\LaravelPayments\DataTransferObjects\ChargeResult;
 use Aqsaahsan301\LaravelPayments\DataTransferObjects\CheckoutResult;
 use Aqsaahsan301\LaravelPayments\Events\PaymentFailed;
 use Aqsaahsan301\LaravelPayments\Events\PaymentSucceeded;
@@ -28,16 +30,57 @@ use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
  * Stripe-only by design (it owns a `subscriptions` table, a Billable trait
  * tied to Eloquent, etc.), which would defeat the point of a gateway-agnostic
  * package. Every future driver (Billplz, ToyyibPay, Curlec) follows this same
- * shape: implement PaymentGateway, talk to exactly one provider's API,
- * translate its responses into this package's own plain types and events.
+ * shape: implement PaymentGateway (and SupportsSubscriptions if the gateway
+ * actually has subscriptions — Billplz/ToyyibPay/DuitNow QR generally don't),
+ * talk to exactly one provider's API, translate its responses into this
+ * package's own plain types and events.
  */
-class StripeDriver implements PaymentGateway
+class StripeDriver implements PaymentGateway, SupportsSubscriptions
 {
     public function __construct(
         private readonly StripeClient $client,
         private readonly ConfigRepository $config,
         private readonly Dispatcher $events,
     ) {}
+
+    public function charge(
+        string $customerEmail,
+        int $amount,
+        string $currency,
+        array $options = [],
+    ): ChargeResult {
+        foreach (['success_url', 'cancel_url'] as $required) {
+            if (empty($options[$required])) {
+                throw new InvalidArgumentException("The '{$required}' option is required to start a Stripe charge.");
+            }
+        }
+
+        $customerId = $options['provider_customer_id'] ?? $this->client->customers->create([
+            'email' => $customerEmail,
+        ])->id;
+
+        $session = $this->client->checkout->sessions->create([
+            'customer' => $customerId,
+            'mode' => 'payment',
+            'line_items' => [[
+                'price_data' => [
+                    'currency' => $currency,
+                    'unit_amount' => $amount,
+                    'product_data' => [
+                        'name' => $options['description'] ?? 'Payment',
+                    ],
+                ],
+                'quantity' => 1,
+            ]],
+            'success_url' => $options['success_url'],
+            'cancel_url' => $options['cancel_url'],
+        ]);
+
+        return new ChargeResult(
+            url: (string) $session->url,
+            providerCustomerId: $customerId,
+        );
+    }
 
     public function checkout(
         ?string $providerCustomerId,
@@ -102,6 +145,11 @@ class StripeDriver implements PaymentGateway
         $object = $event->data->object;
 
         match ($event->type) {
+            // Fires for both checkout modes; only relevant here for one-time
+            // charges (mode=payment) — subscription checkouts get their
+            // PaymentSucceeded from invoice.payment_succeeded instead, once
+            // Stripe generates the first invoice for the new subscription.
+            'checkout.session.completed' => $this->handleCheckoutSessionCompleted($object),
             'invoice.payment_succeeded' => $this->events->dispatch(new PaymentSucceeded(
                 providerCustomerId: (string) $object['customer'],
                 providerSubscriptionId: $this->nullableString($object['subscription'] ?? null),
@@ -130,6 +178,21 @@ class StripeDriver implements PaymentGateway
             )),
             default => null,
         };
+    }
+
+    private function handleCheckoutSessionCompleted(StripeObject $session): void
+    {
+        if ($session['mode'] !== 'payment') {
+            return;
+        }
+
+        $this->events->dispatch(new PaymentSucceeded(
+            providerCustomerId: (string) $session['customer'],
+            providerSubscriptionId: null,
+            amount: (int) $session['amount_total'],
+            currency: (string) $session['currency'],
+            raw: $session->toArray(),
+        ));
     }
 
     private function nullableString(mixed $value): ?string

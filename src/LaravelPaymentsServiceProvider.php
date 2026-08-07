@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Aqsaahsan301\LaravelPayments;
 
 use Aqsaahsan301\LaravelPayments\Contracts\PaymentGateway;
+use Aqsaahsan301\LaravelPayments\Contracts\SupportsSubscriptions;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
+use RuntimeException;
 use Stripe\StripeClient;
 
 class LaravelPaymentsServiceProvider extends ServiceProvider
@@ -23,6 +25,21 @@ class LaravelPaymentsServiceProvider extends ServiceProvider
         $this->app->bind(
             PaymentGateway::class,
             fn (Application $app) => $app->make(PaymentManager::class)->gateway(),
+        );
+
+        $this->app->bind(
+            SupportsSubscriptions::class,
+            function (Application $app) {
+                $gateway = $app->make(PaymentManager::class)->gateway();
+
+                if (! $gateway instanceof SupportsSubscriptions) {
+                    throw new RuntimeException(
+                        'The configured payment gateway ('.config('laravel-payments.default').') does not support subscriptions.',
+                    );
+                }
+
+                return $gateway;
+            },
         );
 
         $this->app->singleton(

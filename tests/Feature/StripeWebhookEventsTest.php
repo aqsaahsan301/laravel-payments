@@ -46,6 +46,49 @@ test('invoice.payment_succeeded dispatches the package\'s own PaymentSucceeded e
     );
 });
 
+test('checkout.session.completed in payment mode dispatches PaymentSucceeded (one-time charge)', function () {
+    Event::fake([PaymentSucceeded::class]);
+    fakeStripeHttp();
+
+    $request = signedStripeWebhookRequest([
+        'id' => 'evt_test',
+        'type' => 'checkout.session.completed',
+        'data' => ['object' => [
+            'mode' => 'payment',
+            'customer' => 'cus_test',
+            'amount_total' => 4900,
+            'currency' => 'usd',
+        ]],
+    ], 'whsec_fake');
+
+    app(StripeDriver::class)->handleWebhook($request);
+
+    Event::assertDispatched(PaymentSucceeded::class, fn ($event) => $event->providerCustomerId === 'cus_test'
+        && $event->providerSubscriptionId === null
+        && $event->amount === 4900,
+    );
+});
+
+test('checkout.session.completed in subscription mode dispatches nothing (invoice.payment_succeeded handles that instead)', function () {
+    Event::fake([PaymentSucceeded::class]);
+    fakeStripeHttp();
+
+    $request = signedStripeWebhookRequest([
+        'id' => 'evt_test',
+        'type' => 'checkout.session.completed',
+        'data' => ['object' => [
+            'mode' => 'subscription',
+            'customer' => 'cus_test',
+            'amount_total' => 1900,
+            'currency' => 'usd',
+        ]],
+    ], 'whsec_fake');
+
+    app(StripeDriver::class)->handleWebhook($request);
+
+    Event::assertNotDispatched(PaymentSucceeded::class);
+});
+
 test('invoice.payment_failed dispatches PaymentFailed', function () {
     Event::fake([PaymentFailed::class]);
     fakeStripeHttp();

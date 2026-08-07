@@ -1,6 +1,17 @@
 # Release Notes
 
-## [Unreleased](https://github.com/aqsaahsan301/laravel-payments/compare/v1.0.0...1.x)
+## [Unreleased](https://github.com/aqsaahsan301/laravel-payments/compare/v1.1.0...1.x)
+
+## [v1.1.0](https://github.com/aqsaahsan301/laravel-payments/compare/v1.0.0...v1.1.0) - 2026-08-07
+
+**Breaking change**: `PaymentGateway` split in two, so gateways with no subscription concept (FPX, Billplz, ToyyibPay, DuitNow QR — common local Malaysian gateways, often one-time/invoice-only) can implement the base contract honestly instead of being forced into a subscription shape they don't have.
+
+- `PaymentGateway` is now just `charge()` (one-time payment, every gateway can do this) + `handleWebhook()`.
+- `checkout()`, `cancelSubscription()`, and `currentPlan()` moved to a new, optional `SupportsSubscriptions` interface. `StripeDriver` implements both. Host app code checks `$gateway instanceof SupportsSubscriptions` (or type-hints/resolves `SupportsSubscriptions` directly, which throws a clear error at resolution time if the configured driver doesn't support it) before offering recurring-billing UI.
+- New `ChargeResult` DTO (mirrors `CheckoutResult`'s shape: a redirect URL + an optional provider customer id) returned by `charge()`.
+- `StripeDriver::charge()` uses a Stripe Checkout Session in `payment` mode (as opposed to `checkout()`'s `subscription` mode).
+- `handleWebhook()` now also handles `checkout.session.completed` for one-time payments, dispatching `PaymentSucceeded` when the session's `mode` is `payment` (subscription-mode sessions still get their `PaymentSucceeded` from `invoice.payment_succeeded`, unchanged).
+- **Upgrading**: if you were calling `checkout()`/`cancelSubscription()`/`currentPlan()` via the `PaymentGateway` contract, switch to type-hinting/resolving `SupportsSubscriptions` instead.
 
 ## [v1.0.0](https://github.com/aqsaahsan301/laravel-payments/compare/v0.1.0...v1.0.0) - 2026-08-07
 

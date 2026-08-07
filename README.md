@@ -40,9 +40,10 @@ php artisan vendor:publish --tag="laravel-payments-config"
 
 This package takes a different shape:
 
-- **One contract, `PaymentGateway`** — `checkout()`, `handleWebhook()`, `cancelSubscription()`, `currentPlan()`. Every driver implements it; every consumer depends on it, never on a concrete driver.
+- **A base contract shaped around what *every* gateway can do.** `PaymentGateway` has just `charge()` (a one-time payment) and `handleWebhook()`. It's deliberately *not* shaped around Stripe's subscription model — plenty of real gateways (FPX, Billplz, ToyyibPay, DuitNow QR) are one-time/invoice-only with no subscription concept at all, and a contract that assumed subscriptions would make them impossible to implement honestly.
+- **Subscriptions are a separate, optional contract.** Drivers whose gateway actually supports recurring billing (Stripe, presumably Curlec/Razorpay) additionally implement `SupportsSubscriptions` — `checkout()`, `cancelSubscription()`, `currentPlan()`. Host app code checks `$gateway instanceof SupportsSubscriptions` (or resolves `SupportsSubscriptions` from the container directly) before offering recurring-billing UI, rather than assuming every driver has it.
 - **`PaymentManager` resolves the configured driver** the same way Laravel's own `MailManager`/`QueueManager` do. Set `PAYMENT_GATEWAY=stripe` in `.env`; swapping to a different driver later is a config change plus a new driver class, not a rewrite.
-- **No database, no Eloquent models, no opinion on your schema.** The package is completely stateless. `checkout()` takes and returns plain identifiers (strings) that *you* persist however you like. Inbound webhooks come back out as this package's own Laravel events — `PaymentSucceeded`, `PaymentFailed`, `SubscriptionCancelled`, `SubscriptionUpdated` — carrying plain data, not gateway SDK objects. You listen for those and update your own tables. This is what makes the package reusable across projects with completely different schemas (a `User` is billable in one app, an `Organization` in another — the package doesn't care).
+- **No database, no Eloquent models, no opinion on your schema.** The package is completely stateless. `charge()`/`checkout()` take and return plain identifiers (strings) that *you* persist however you like. Inbound webhooks come back out as this package's own Laravel events — `PaymentSucceeded`, `PaymentFailed`, `SubscriptionCancelled`, `SubscriptionUpdated` — carrying plain data, not gateway SDK objects. You listen for those and update your own tables. This is what makes the package reusable across projects with completely different schemas (a `User` is billable in one app, an `Organization` in another — the package doesn't care).
 
 ## Configuration
 
@@ -87,19 +88,43 @@ Then point your gateway's dashboard (Stripe's webhook settings, for example) at 
 
 ## Usage
 
-### Starting a checkout
+### A one-time payment (every gateway supports this)
 
 ```php
 use Aqsaahsan301\LaravelPayments\Contracts\PaymentGateway;
 
+class CheckoutController
+{
+    public function pay(Request $request, PaymentGateway $gateway)
+    {
+        $result = $gateway->charge(
+            customerEmail: $request->user()->email,
+            amount: 4900, // smallest currency unit — $49.00
+            currency: 'usd',
+            options: [
+                'success_url' => route('orders.show', $order).'?paid=1',
+                'cancel_url' => route('orders.show', $order).'?paid=0',
+            ],
+        );
+
+        return redirect()->away($result->url);
+    }
+}
+```
+
+### Starting a subscription checkout (only for drivers that support it)
+
+```php
+use Aqsaahsan301\LaravelPayments\Contracts\SupportsSubscriptions;
+
 class BillingController
 {
-    public function checkout(Request $request, PaymentGateway $gateway)
+    public function checkout(Request $request, SupportsSubscriptions $gateway)
     {
         $organization = $request->user()->organization;
 
         $result = $gateway->checkout(
-            providerCustomerId: $organization->stripe_id, // null if they don't have one yet
+            providerCustomerId: $organization->billing_customer_id, // null if they don't have one yet
             customerEmail: $request->user()->email,
             plan: 'starter',
             options: [
@@ -109,14 +134,16 @@ class BillingController
         );
 
         // Persist the customer id yourself — the package never does this for you.
-        $organization->update(['stripe_id' => $result->providerCustomerId]);
+        $organization->update(['billing_customer_id' => $result->providerCustomerId]);
 
         return redirect()->away($result->url);
     }
 }
 ```
 
-`checkout()` always returns a URL to redirect the browser to — for hosted-checkout gateways like Stripe, that has to be a real top-level navigation (`redirect()->away(...)` in a controller, or `window.location.href = ...` from an SPA/Inertia frontend), not an XHR-driven route visit, since the response goes off-site.
+Type-hinting `SupportsSubscriptions` (rather than `PaymentGateway`) means the container throws immediately with a clear message if `PAYMENT_GATEWAY` is ever pointed at a driver that doesn't support subscriptions — instead of failing later with a "method does not exist" error. If your app needs to conditionally show recurring-billing UI only when it's available, resolve `PaymentGateway` and check `instanceof SupportsSubscriptions` instead of hard-depending on it.
+
+Both `charge()` and `checkout()` return a URL to redirect the browser to — for hosted-checkout gateways like Stripe, that has to be a real top-level navigation (`redirect()->away(...)` in a controller, or `window.location.href = ...` from an SPA/Inertia frontend), not an XHR-driven route visit, since the response goes off-site.
 
 ### Reacting to webhook events
 
@@ -129,7 +156,7 @@ class RevokeAccessOnCancellation
 {
     public function handle(SubscriptionCancelled $event): void
     {
-        Organization::where('stripe_id', $event->providerCustomerId)
+        Organization::where('billing_customer_id', $event->providerCustomerId)
             ->update(['plan' => null]);
     }
 }
@@ -140,19 +167,19 @@ Available events: `PaymentSucceeded`, `PaymentFailed`, `SubscriptionCancelled`, 
 ### Checking the current plan / cancelling
 
 ```php
-$gateway->currentPlan($organization->stripe_id);      // 'starter' | 'pro' | null
-$gateway->cancelSubscription($subscription->stripe_id);
+$gateway->currentPlan($organization->billing_customer_id);      // 'starter' | 'pro' | null
+$gateway->cancelSubscription($organization->billing_subscription_id);
 ```
 
 ## Adding a new driver
 
-Every driver is a class implementing `Aqsaahsan301\LaravelPayments\Contracts\PaymentGateway` — `StripeDriver` (`src/Drivers/StripeDriver.php`) is the reference implementation to copy the shape of. To add, say, a Billplz driver:
+Every driver is a class implementing `Aqsaahsan301\LaravelPayments\Contracts\PaymentGateway` (and `SupportsSubscriptions` too, only if the gateway genuinely has recurring billing) — `StripeDriver` (`src/Drivers/StripeDriver.php`) is the reference implementation to copy the shape of. To add, say, a Billplz driver (one-time/invoice-only, no subscriptions):
 
-1. **Write the driver.** `src/Drivers/BillplzDriver.php implements PaymentGateway`. It's the *only* class allowed to import anything from Billplz's SDK/API client — everything else in the package (and in host apps) depends on the contract, never on your driver directly.
-2. **Translate provider events into this package's own events.** In your `handleWebhook()`, map Billplz's webhook payload fields onto `PaymentSucceeded`/`PaymentFailed`/`SubscriptionCancelled`/`SubscriptionUpdated` and dispatch those — don't invent new event classes per driver, or host app listeners have to know which gateway is active, defeating the point.
+1. **Write the driver.** `src/Drivers/BillplzDriver.php implements PaymentGateway`. It's the *only* class allowed to import anything from Billplz's SDK/API client — everything else in the package (and in host apps) depends on the contract, never on your driver directly. Implement `charge()` and `handleWebhook()`; skip `SupportsSubscriptions` entirely if the gateway has no subscription concept — that's the whole point of the split.
+2. **Translate provider events into this package's own events.** In your `handleWebhook()`, map Billplz's webhook payload fields onto `PaymentSucceeded`/`PaymentFailed` (and `SubscriptionCancelled`/`SubscriptionUpdated` too, if you implemented `SupportsSubscriptions`) and dispatch those — don't invent new event classes per driver, or host app listeners have to know which gateway is active, defeating the point.
 3. **Register it.** Either add a `createBillplzDriver()` method to `PaymentManager` (the built-in, Laravel `Manager`-style way — see `createStripeDriver()`), or call `$manager->extendDriver('billplz', BillplzDriver::class)` from your own service provider if you're shipping the driver as a separate package.
-4. **Test it the same way `StripeDriverTest`/`StripeWebhookEventsTest` do**: install a fake HTTP client for your provider's SDK (or bind a mock client in the container) so tests never hit the network, then assert on `checkout()`'s returned `CheckoutResult`, on which events `handleWebhook()` dispatches for which payloads, and that an invalid signature is rejected.
-5. Nothing in `PaymentGateway`, `PaymentManager`, the routes file, the events, or any host app code should need to change. If it does, that's a sign the new driver needs something the contract doesn't offer yet — widen the contract, not a driver-specific escape hatch.
+4. **Test it the same way `StripeDriverTest`/`StripeWebhookEventsTest` do**: install a fake HTTP client for your provider's SDK (or bind a mock client in the container) so tests never hit the network, then assert on `charge()`'s returned `ChargeResult`, on which events `handleWebhook()` dispatches for which payloads, and that an invalid signature is rejected.
+5. Nothing in `PaymentGateway`, `SupportsSubscriptions`, `PaymentManager`, the routes file, the events, or any host app code should need to change. If it does, that's a sign the new driver needs something the contract doesn't offer yet — widen the contract, not a driver-specific escape hatch.
 
 ## Changelog
 
