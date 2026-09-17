@@ -1,6 +1,13 @@
 # Release Notes
 
-## [Unreleased](https://github.com/aqsaahsan301/laravel-payments/compare/v1.1.0...1.x)
+## [Unreleased](https://github.com/aqsaahsan301/laravel-payments/compare/v1.1.1...1.x)
+
+## [v1.1.1](https://github.com/aqsaahsan301/laravel-payments/compare/v1.1.0...v1.1.1) - 2026-09-17
+
+No code changes to the package itself — this release formalizes the test/CI setup and documents the design principle behind `v1.1.0`'s contract split.
+
+- CI: GitHub Actions matrix (PHP 8.3–8.5 × Laravel 12/13 × `prefer-lowest`/`prefer-stable` × ubuntu/windows) runs PHPStan, Pint, type coverage, and the full Pest/Testbench suite on every push and PR. The README's Tests badge reflects this workflow.
+- Docs: added an explicit "Design principle: Interface Segregation (SOLID)" section to the README naming and explaining the ISP rationale behind the `PaymentGateway`/`SupportsSubscriptions` split shipped in `v1.1.0`.
 
 ## [v1.1.0](https://github.com/aqsaahsan301/laravel-payments/compare/v1.0.0...v1.1.0) - 2026-08-07
 

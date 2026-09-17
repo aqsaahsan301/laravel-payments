@@ -45,6 +45,16 @@ This package takes a different shape:
 - **`PaymentManager` resolves the configured driver** the same way Laravel's own `MailManager`/`QueueManager` do. Set `PAYMENT_GATEWAY=stripe` in `.env`; swapping to a different driver later is a config change plus a new driver class, not a rewrite.
 - **No database, no Eloquent models, no opinion on your schema.** The package is completely stateless. `charge()`/`checkout()` take and return plain identifiers (strings) that *you* persist however you like. Inbound webhooks come back out as this package's own Laravel events — `PaymentSucceeded`, `PaymentFailed`, `SubscriptionCancelled`, `SubscriptionUpdated` — carrying plain data, not gateway SDK objects. You listen for those and update your own tables. This is what makes the package reusable across projects with completely different schemas (a `User` is billable in one app, an `Organization` in another — the package doesn't care).
 
+### Design principle: Interface Segregation (SOLID)
+
+The `PaymentGateway` / `SupportsSubscriptions` split (shipped in `v1.1.0`) is a direct application of the **Interface Segregation Principle** — "no client should be forced to depend on methods it does not use." Before the split, `PaymentGateway` carried `checkout()`, `cancelSubscription()`, and `currentPlan()` as required methods, which meant a one-time/invoice-only gateway (FPX, Billplz, ToyyibPay) had no honest way to implement it — it would have to either throw `NotSupportedException` from three methods or fake a subscription concept it doesn't have. Both are ISP violations: the *interface* was shaped around one client's needs (Stripe) and imposed on every implementer.
+
+Splitting the fat interface into a lean base contract (`charge()`, `handleWebhook()` — what every gateway can do) plus a segregated, opt-in contract (`SupportsSubscriptions` — what only some gateways can do) means:
+
+- A driver only implements what its gateway actually supports. No dead methods, no `throw` stubs.
+- Consumers depend on the narrowest interface that satisfies them — code that only ever charges type-hints `PaymentGateway`; code that needs recurring billing type-hints `SupportsSubscriptions` and gets a clear container-resolution error if the active driver doesn't implement it, instead of a runtime "method does not exist" surprise.
+- Adding a gateway with a different capability shape (say, one that supports refunds but not subscriptions) is a new optional interface, not a widening of the base contract that breaks every other driver.
+
 ## Configuration
 
 ```bash
